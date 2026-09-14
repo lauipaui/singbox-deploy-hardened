@@ -31,6 +31,14 @@ less install-singbox-yyds.sh
 sudo bash install-singbox-yyds.sh
 ```
 
+也可以使用仓库提供的一键入口：
+
+```bash
+sudo bash install.sh
+```
+
+`install.sh` 会自动调用同目录下的加固主脚本 `install-singbox-yyds.sh`。本仓库为私有仓库，远程服务器需要先完成 GitHub 身份认证后再克隆；脚本不内置令牌或密码。
+
 安装过程中会依次询问节点名称、协议、端口及 Reality 的连接 IP/SNI。未手动指定的端口、密码和 UUID 会随机生成。安装完成后，脚本会显示客户端 URI。
 
 私有仓库的克隆需要 GitHub 凭据；不要把访问令牌、密码或私钥写入脚本、README 或命令历史。
