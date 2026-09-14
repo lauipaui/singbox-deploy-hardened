@@ -1,0 +1,46 @@
+name: Verify installer and protocols
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install official test engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y jq curl openssl
+          curl -fSL --connect-timeout 10 --max-time 120 --retry 2 \
+            https://github.com/SagerNet/sing-box/releases/download/v1.14.0/sing-box-1.14.0-linux-amd64.tar.gz \
+            -o "$RUNNER_TEMP/sing-box.tar.gz"
+          tar -xzf "$RUNNER_TEMP/sing-box.tar.gz" -C "$RUNNER_TEMP"
+          echo "TEST_SINGBOX=$RUNNER_TEMP/sing-box-1.14.0-linux-amd64/sing-box" >> "$GITHUB_ENV"
+          echo 'TEST_BASH=/bin/bash' >> "$GITHUB_ENV"
+          echo 'TEST_JQ_DIR=/usr/bin' >> "$GITHUB_ENV"
+      - name: Validate config and transfer traffic over all five protocols
+        run: node test-regression.cjs
+      - name: Exercise full installer and systemd on disposable Ubuntu runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -m 755 "$TEST_SINGBOX" /usr/bin/sing-box
+          # Blank node name; SS only; default cipher; loopback address; fixed port; keep installed binary.
+          printf '\n1\n\n127.0.0.1\n24567\nn\n' | sudo bash install-singbox-yyds.sh
+          sudo sing-box check -c /etc/sing-box/config.json
+          sudo systemctl is-active --quiet sing-box
+          test "$(sudo stat -c %a /etc/sing-box)" = 700
+          test "$(sudo stat -c %a /etc/sing-box/config.json)" = 600
+          printf '0\n' | sudo bash /usr/local/bin/sb
+      - name: Stop disposable test service
+        if: always()
+        run: sudo systemctl stop sing-box || true
