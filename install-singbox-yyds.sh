@@ -29,6 +29,21 @@ install_upstream() {
     return "$status"
 }
 
+install_alpine_singbox() {
+    local stable_repo edge_repo
+    stable_repo="https://dl-cdn.alpinelinux.org/alpine/v$(cut -d. -f1,2 /etc/alpine-release)/community"
+    edge_repo="https://dl-cdn.alpinelinux.org/alpine/edge/community"
+
+    info "尝试从 Alpine 当前版本 community 安装 sing-box"
+    apk add --no-cache --repository="$stable_repo" sing-box 2>/dev/null && return 0
+
+    warn "当前版本仓库没有可用包，尝试 edge/community"
+    apk add --no-cache --repository="$edge_repo" sing-box 2>/dev/null && return 0
+
+    warn "Alpine 软件包安装失败，改用 sing-box 官方安装器"
+    install_upstream
+}
+
 # -----------------------
 # 彩色输出函数
 info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }
@@ -96,7 +111,7 @@ install_deps() {
     case "$OS" in
         alpine)
             apk update || { err "apk update 失败"; exit 1; }
-            apk add --no-cache bash curl ca-certificates openssl openrc jq || {
+            apk add --no-cache bash curl ca-certificates openssl openrc jq haproxy || {
                 err "依赖安装失败"
                 exit 1
             }
@@ -272,9 +287,17 @@ if $ENABLE_REALITY || $ENABLE_ANYTLS; then
     echo "请输入 Reality 的 SNI(留空默认 addons.mozilla.org):"
     read -r REALITY_SNI
     REALITY_SNI="$(echo "${REALITY_SNI:-addons.mozilla.org}" | tr -d '[:space:]')"
+    echo "是否启用 Reality SNI 白名单防偷流量？(Y/n):"
+    read -r REALITY_GUARD_CHOICE
+    if [[ "${REALITY_GUARD_CHOICE:-Y}" =~ ^[Nn]$ ]]; then
+        ENABLE_REALITY_GUARD=false
+    else
+        ENABLE_REALITY_GUARD=true
+    fi
 else
     # 也设默认，方便后续统一处理（若未选 reality，也写入缓存以便 sb 读取）
     REALITY_SNI="addons.mozilla.org"
+    ENABLE_REALITY_GUARD=false
 fi
 
 # Only allow host/SNI characters before values are persisted and later sourced by sb.
@@ -399,6 +422,13 @@ for protocol in SS HY2 TUIC REALITY ANYTLS; do
     fi
 done
 
+REALITY_GUARD_PORT=9443
+if $ENABLE_REALITY_GUARD; then
+    while [ -n "${used_ports[$REALITY_GUARD_PORT]:-}" ]; do
+        REALITY_GUARD_PORT=$((REALITY_GUARD_PORT + 1))
+    done
+fi
+
 # -----------------------
 # 安装 sing-box
 install_singbox() {
@@ -416,9 +446,9 @@ install_singbox() {
 
     case "$OS" in
         alpine)
-            info "使用 Edge 仓库安装 sing-box"
+            info "使用 Alpine 软件包安装 sing-box"
             apk update || { err "apk update 失败"; exit 1; }
-            apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
+            install_alpine_singbox || {
                 err "sing-box 安装失败"
                 exit 1
             }
@@ -543,6 +573,12 @@ create_config() {
     > "$TEMP_INBOUNDS"
     
     local need_comma=false
+    local reality_handshake_server="$REALITY_SNI"
+    local reality_handshake_port=443
+    if $ENABLE_REALITY_GUARD; then
+        reality_handshake_server="127.0.0.1"
+        reality_handshake_port="$REALITY_GUARD_PORT"
+    fi
     
     if $ENABLE_SS; then
         cat >> "$TEMP_INBOUNDS" <<'INBOUND_SS'
@@ -636,11 +672,12 @@ INBOUND_TUIC
         "reality": {
           "enabled": true,
           "handshake": {
-            "server": "REALITY_SNI_PLACEHOLDER",
-            "server_port": 443
+            "server": "REALITY_HANDSHAKE_SERVER_PLACEHOLDER",
+            "server_port": REALITY_HANDSHAKE_PORT_PLACEHOLDER
           },
           "private_key": "REALITY_PK_PLACEHOLDER",
-          "short_id": ["REALITY_SID_PLACEHOLDER"]
+          "short_id": ["REALITY_SID_PLACEHOLDER"],
+          "max_time_difference": "1m"
         }
       }
     }
@@ -650,6 +687,8 @@ INBOUND_REALITY
         sed -i "s|REALITY_PK_PLACEHOLDER|$REALITY_PK|g" "$TEMP_INBOUNDS"
         sed -i "s|REALITY_SID_PLACEHOLDER|$REALITY_SID|g" "$TEMP_INBOUNDS"
         sed -i "s|REALITY_SNI_PLACEHOLDER|$REALITY_SNI|g" "$TEMP_INBOUNDS"
+        sed -i "s|REALITY_HANDSHAKE_SERVER_PLACEHOLDER|$reality_handshake_server|g" "$TEMP_INBOUNDS"
+        sed -i "s|REALITY_HANDSHAKE_PORT_PLACEHOLDER|$reality_handshake_port|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
 
@@ -674,13 +713,14 @@ INBOUND_REALITY
         "reality": {
           "enabled": true,
           "handshake": {
-            "server": "REALITY_SNI_PLACEHOLDER",
-            "server_port": 443
+            "server": "REALITY_HANDSHAKE_SERVER_PLACEHOLDER",
+            "server_port": REALITY_HANDSHAKE_PORT_PLACEHOLDER
           },
           "private_key": "REALITY_PK_PLACEHOLDER",
           "short_id": [
             "REALITY_SID_PLACEHOLDER"
-          ]
+          ],
+          "max_time_difference": "1m"
         }
       }
     }
@@ -692,6 +732,8 @@ INBOUND_ANYTLS
     sed -i "s|REALITY_PK_PLACEHOLDER|$REALITY_PK|g" "$TEMP_INBOUNDS"
     sed -i "s|REALITY_SID_PLACEHOLDER|$REALITY_SID|g" "$TEMP_INBOUNDS"
     sed -i "s|REALITY_SNI_PLACEHOLDER|$REALITY_SNI|g" "$TEMP_INBOUNDS"
+    sed -i "s|REALITY_HANDSHAKE_SERVER_PLACEHOLDER|$reality_handshake_server|g" "$TEMP_INBOUNDS"
+    sed -i "s|REALITY_HANDSHAKE_PORT_PLACEHOLDER|$reality_handshake_port|g" "$TEMP_INBOUNDS"
 
     need_comma=true
     fi
@@ -743,7 +785,8 @@ CONFIG_TAIL
     local metadata
     metadata="$(mktemp /etc/sing-box/cache.XXXXXX.json)"
     jq -n --arg ip "$CUSTOM_IP" --arg sni "$REALITY_SNI" \
-        '{CUSTOM_IP:$ip, REALITY_SNI:$sni}' > "$metadata"
+        --argjson guard "$ENABLE_REALITY_GUARD" --argjson guard_port "$REALITY_GUARD_PORT" \
+        '{CUSTOM_IP:$ip, REALITY_SNI:$sni, ENABLE_REALITY_GUARD:$guard, REALITY_GUARD_PORT:$guard_port}' > "$metadata"
     chmod 600 "$metadata"
     mv -f -- "$metadata" /etc/sing-box/.config_cache
     info "配置校验通过，连接信息已保存为 JSON"
@@ -753,6 +796,78 @@ CONFIG_TAIL
 # 调用配置生成
 create_config
 secure_sensitive_files
+
+setup_reality_guard() {
+    $ENABLE_REALITY_GUARD || return 0
+    command -v haproxy >/dev/null 2>&1 || {
+        case "$OS" in
+            alpine) apk add --no-cache haproxy ;;
+            debian) apt-get install -y haproxy ;;
+            redhat) yum install -y haproxy ;;
+            *) err "无法安装 HAProxy 防偷流量组件"; return 1 ;;
+        esac
+    }
+
+    cat > /etc/sing-box/reality-guard.cfg <<EOF
+global
+    maxconn 2048
+
+defaults
+    mode tcp
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+
+frontend reality_guard_in
+    bind 127.0.0.1:$REALITY_GUARD_PORT
+    tcp-request inspect-delay 5s
+    acl allowed_sni req.ssl_sni -i $REALITY_SNI
+    tcp-request content accept if allowed_sni
+    tcp-request content reject
+    default_backend reality_guard_out
+
+backend reality_guard_out
+    server camouflage $REALITY_SNI:443 check
+EOF
+    chmod 600 /etc/sing-box/reality-guard.cfg
+    haproxy -c -f /etc/sing-box/reality-guard.cfg || return 1
+
+    if [ "$OS" = "alpine" ]; then
+        cat > /etc/init.d/sing-box-reality-guard <<'OPENRC_GUARD'
+#!/sbin/openrc-run
+name="sing-box Reality guard"
+command="/usr/sbin/haproxy"
+command_args="-db -f /etc/sing-box/reality-guard.cfg"
+supervisor="supervise-daemon"
+supervise_daemon_args="--respawn-max 0 --respawn-delay 5"
+depend() { need net; }
+OPENRC_GUARD
+        chmod +x /etc/init.d/sing-box-reality-guard
+        rc-update add sing-box-reality-guard default >/dev/null 2>&1 || true
+        rc-service sing-box-reality-guard restart
+    else
+        cat > /etc/systemd/system/sing-box-reality-guard.service <<'SYSTEMD_GUARD'
+[Unit]
+Description=Reality SNI allowlist guard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/haproxy -Ws -f /etc/sing-box/reality-guard.cfg
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD_GUARD
+        systemctl daemon-reload
+        systemctl enable --now sing-box-reality-guard
+    fi
+    info "Reality 防偷流量已启用：只允许 SNI $REALITY_SNI"
+}
+
+setup_reality_guard
 
 info "配置生成完成，准备设置服务..."
 
@@ -772,16 +887,15 @@ description="Sing-box Proxy Server"
 command="/usr/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
 pidfile="/run/${RC_SVCNAME}.pid"
-command_background="yes"
 output_log="/var/log/sing-box.log"
 error_log="/var/log/sing-box.err"
 # 自动拉起（程序崩溃、OOM、被 kill 后自动恢复）
-supervisor=supervise-daemon
+supervisor="supervise-daemon"
 supervise_daemon_args="--respawn-max 0 --respawn-delay 5"
 
 depend() {
     need net
-    after firewall
+    after firewall sing-box-reality-guard
 }
 
 start_pre() {
@@ -813,7 +927,7 @@ OPENRC
 [Unit]
 Description=Sing-box Proxy Server
 Documentation=https://sing-box.sagernet.org
-After=network.target nss-lookup.target
+After=network.target nss-lookup.target sing-box-reality-guard.service
 Wants=network.target
 
 [Service]
@@ -1308,13 +1422,16 @@ action_uninstall() {
     info "正在卸载..."
     service_stop || true
     if [ "$OS" = "alpine" ]; then
+        rc-service sing-box-reality-guard stop 2>/dev/null || true
+        rc-update del sing-box-reality-guard default 2>/dev/null || true
         rc-update del sing-box default 2>/dev/null || true
-        rm -f /etc/init.d/sing-box
+        rm -f /etc/init.d/sing-box /etc/init.d/sing-box-reality-guard
         apk del sing-box 2>/dev/null || true
     else
+        systemctl disable --now sing-box-reality-guard 2>/dev/null || true
         systemctl stop sing-box 2>/dev/null || true
         systemctl disable sing-box 2>/dev/null || true
-        rm -f /etc/systemd/system/sing-box.service
+        rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sing-box-reality-guard.service
         systemctl daemon-reload 2>/dev/null || true
         if command -v apt-get >/dev/null 2>&1; then
             apt-get purge -y sing-box >/dev/null 2>&1 || true
@@ -1407,14 +1524,19 @@ detect_os
 
 info "安装依赖..."
 case "$OS" in
-    alpine) apk update; apk add --no-cache curl jq bash openssl ca-certificates ;;
-    debian) apt-get update -y; apt-get install -y curl jq bash openssl ca-certificates ;;
-    redhat) yum install -y curl jq bash openssl ca-certificates ;;
+    alpine) apk update; apk add --no-cache curl jq bash openssl ca-certificates haproxy ;;
+    debian) apt-get update -y; apt-get install -y curl jq bash openssl ca-certificates haproxy ;;
+    redhat) yum install -y curl jq bash openssl ca-certificates haproxy ;;
 esac
 
 info "安装 sing-box..."
 case "$OS" in
-    alpine) apk add --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
+    alpine)
+        ALPINE_BRANCH="$(cut -d. -f1,2 /etc/alpine-release)"
+        apk add --no-cache --repository="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_BRANCH}/community" sing-box 2>/dev/null ||
+        apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community sing-box 2>/dev/null ||
+        install_upstream
+        ;;
     *) install_upstream ;;
 esac
 
@@ -1451,9 +1573,10 @@ cat > "$RELAY_CONFIG" <<EOF
         "server_name": "__REALITY_SNI__",
         "reality": {
           "enabled": true,
-          "handshake": { "server": "__REALITY_SNI__", "server_port": 443 },
+          "handshake": { "server": "127.0.0.1", "server_port": 9443 },
           "private_key": "$REALITY_PK",
-          "short_id": ["$REALITY_SID"]
+          "short_id": ["$REALITY_SID"],
+          "max_time_difference": "1m"
         }
       },
       "tag": "vless-in"
@@ -1479,13 +1602,45 @@ fi
 chmod 600 "$RELAY_CONFIG"
 mv -- "$RELAY_CONFIG" /etc/sing-box/config.json
 
+cat > /etc/sing-box/reality-guard.cfg <<'GUARD_CFG'
+global
+    maxconn 2048
+defaults
+    mode tcp
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+frontend reality_guard_in
+    bind 127.0.0.1:9443
+    tcp-request inspect-delay 5s
+    acl allowed_sni req.ssl_sni -i __REALITY_SNI__
+    tcp-request content accept if allowed_sni
+    tcp-request content reject
+    default_backend reality_guard_out
+backend reality_guard_out
+    server camouflage __REALITY_SNI__:443 check
+GUARD_CFG
+chmod 600 /etc/sing-box/reality-guard.cfg
+haproxy -c -f /etc/sing-box/reality-guard.cfg
+
 if [ "$OS" = "alpine" ]; then
+    cat > /etc/init.d/sing-box-reality-guard <<'GUARD_OPENRC'
+#!/sbin/openrc-run
+name="sing-box Reality guard"
+command="/usr/sbin/haproxy"
+command_args="-db -f /etc/sing-box/reality-guard.cfg"
+supervisor="supervise-daemon"
+supervise_daemon_args="--respawn-max 0 --respawn-delay 5"
+depend() { need net; }
+GUARD_OPENRC
+    chmod +x /etc/init.d/sing-box-reality-guard
+    rc-update add sing-box-reality-guard default
+    rc-service sing-box-reality-guard restart
     cat > /etc/init.d/sing-box <<'SVC'
 #!/sbin/openrc-run
 name="sing-box"
 command="/usr/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
-command_background="yes"
 pidfile="/run/sing-box.pid"
 supervisor=supervise-daemon
 supervise_daemon_args="--respawn-max 0 --respawn-delay 5"
@@ -1496,10 +1651,20 @@ SVC
     rc-update add sing-box default
     rc-service sing-box restart
 else
+    cat > /etc/systemd/system/sing-box-reality-guard.service <<'GUARD_SYSTEMD'
+[Unit]
+Description=Reality SNI allowlist guard
+After=network-online.target
+[Service]
+ExecStart=/usr/sbin/haproxy -Ws -f /etc/sing-box/reality-guard.cfg
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+GUARD_SYSTEMD
     cat > /etc/systemd/system/sing-box.service <<'SYSTEMD'
 [Unit]
 Description=Sing-box Relay
-After=network.target
+After=network.target sing-box-reality-guard.service
 [Service]
 ExecStart=/usr/bin/sing-box run -c /etc/sing-box/config.json
 Restart=on-failure
@@ -1508,6 +1673,7 @@ RestartSec=10s
 WantedBy=multi-user.target
 SYSTEMD
     systemctl daemon-reload
+    systemctl enable --now sing-box-reality-guard
     systemctl enable sing-box
     systemctl restart sing-box
 fi

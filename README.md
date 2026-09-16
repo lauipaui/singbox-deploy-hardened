@@ -84,6 +84,9 @@ Debian、Ubuntu、CentOS、RHEL 和 Fedora 默认使用 systemd；Alpine 使用 
 - 使用 `mktemp` 创建临时配置和中转脚本，降低临时文件名冲突及抢占风险。
 - 对用户输入的公网 IP 和 Reality SNI 做允许字符校验，并使用 shell 转义后写入缓存。
 - Alpine 软件源改用 HTTPS。
+- Reality 可默认启用本机 HAProxy SNI 白名单：未通过 Reality 鉴权的 TLS 连接只有在 SNI 与安装时填写的伪装域名完全一致时才会被转发，避免 Cloudflare 等共享 CDN 被当作任意 TCP 中转消耗 VPS 流量。
+- Reality 增加 `max_time_difference: 1m`，降低异常握手和重放窗口。
+- Alpine 优先使用当前发行版的 `community` 仓库，同时提供 `edge/community` 和官方安装器回退；OpenRC 服务改用 `supervise-daemon` 单一监管方式。
 - 卸载时按系统实际可用的 `apt-get`、`dnf` 或 `yum` 选择包管理器。
 
 ## 安全注意事项
@@ -91,6 +94,8 @@ Debian、Ubuntu、CentOS、RHEL 和 Fedora 默认使用 systemd；Alpine 使用 
 这是一个会以 root 身份修改系统的部署脚本。使用前应审阅脚本内容，并在防火墙中只开放实际启用的端口。
 
 更新功能会从 `https://sing-box.app/install.sh` 获取上游安装脚本；生产环境建议在变更前固定版本并审阅下载内容。Hysteria2/TUIC 的客户端 URI 目前包含 `insecure=1`，因为服务端使用自签名证书；如果客户端环境支持，建议改用受信任证书并移除该选项。
+
+当启用 Reality 防偷流量时，脚本会安装独立的 `sing-box-reality-guard` 服务并仅监听 `127.0.0.1`，不会新增公网端口。更换 Reality SNI 时必须同步更新 `/etc/sing-box/reality-guard.cfg`，否则伪装握手会被白名单拒绝。
 
 卸载操作会删除 `/etc/sing-box`、服务文件、日志、管理命令及 `/usr/bin/sing-box`，请先备份需要保留的配置和凭据。
 
