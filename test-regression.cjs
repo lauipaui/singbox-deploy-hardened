@@ -131,6 +131,9 @@ export -f curl id
     const config=forward(path.join(temp,'config-'+mask+'.json'));
     let setup=prelude+'\nsing-box(){ "'+forward(engine)+'" "$@"; }\n'+confFunc+'\nCONFIG_PATH="'+config+'"\n';
     names.forEach((n,i)=>{setup+='ENABLE_'+n+'='+!!(mask&(1<<i))+'\nPORT_'+n+'='+ports[i]+'\n';});
+    // create_config is extracted and called directly, so interactive-only
+    // variables must have explicit defaults under bash -u.
+    setup+='ENABLE_REALITY_GUARD=false\nREALITY_GUARD_PORT=9443\n';
     setup+='SS_METHOD=2022-blake3-aes-128-gcm\nPSK_SS=AAAAAAAAAAAAAAAAAAAAAA==\nPSK_HY2=test-password\nPSK_TUIC=test-password\nUUID=12345678-1234-4234-8234-123456789abc\nUUID_TUIC=12345678-1234-4234-8234-123456789abc\nANYTLS_USER=test\nANYTLS_PSK=test-password\nCUSTOM_IP=2001:db8::1\nREALITY_SNI=www.bing.com\nREALITY_PK='+privateKey+'\nREALITY_PUB='+publicKey+'\nREALITY_SID='+sid+'\ncreate_config\n';
     ok(run(setup),'real engine validates generated configuration mask='+mask);
     const parsed=JSON.parse(fs.readFileSync(config));
