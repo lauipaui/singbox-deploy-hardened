@@ -129,7 +129,7 @@ TEST_BASH=/bin/bash TEST_JQ_DIR=/usr/bin TEST_SINGBOX=/usr/bin/sing-box \
 
 ## 备份、回滚与常见问题
 
-- 重装已有环境前，脚本把 `config.json`、`.config_cache`、`.protocols`、`.reality_pub`、`.reality_sid` 中已存在的文件备份到 `/etc/sing-box/backup.*`，权限收紧。这不是整机快照，也不覆盖所有证书、服务、二进制和 HAProxy 配置；请额外保存需要恢复的项目和版本。
+- 重装已有环境前，脚本把 `config.json`、`.config_cache`、`.protocols`、`.reality_pub`、`.reality_sid` 中已存在的文件备份到 `/etc/sing-box/backup.*`，权限收紧。**该备份仅在 `/etc/sing-box/config.json` 存在时才会创建**；若之前安装中断/损坏，`config.json` 缺失但状态文件仍在，重跑会直接覆盖 `.config_cache`、`.protocols` 和 Reality 元数据而不备份，此时请先手动复制整个 `/etc/sing-box`。这不是整机快照，也不覆盖所有证书、服务、二进制和 HAProxy 配置；请额外保存需要恢复的项目和版本。
 - 端口重置等配置替换路径会先校验候选、保存 `rollback.*.json`，新配置启动失败时尝试恢复旧配置。手工编辑、外部更新和完整卸载不能依赖这一局部回滚。
 - 生产回滚前保持 SSH 会话/带外入口：恢复受保护的备份和兼容核心，`sing-box check -c /etc/sing-box/config.json` 成功后重启原服务，再检查日志及真实客户端。
 - 固定哈希失败：可能是 GitHub 缓存或入口与主脚本不同步，重新获取同一受信任版本并核对；**不要删掉校验绕过失败**。
